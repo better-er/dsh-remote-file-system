@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+lib/
+
+# 构建缓存
+*.tsbuildinfo
+
+# 编辑器/系统杂项
+.DS_Store
+Thumbs.db
+
+# 本地设计文档，不入仓库
+DESIGN.md
+
+# 本地临时文件
+*.log

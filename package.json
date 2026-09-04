@@ -1,0 +1,73 @@
+{
+  "name": "dsh-remote-file-system",
+  "version": "0.1.0",
+  "description": "模型可见的远程文件工具 read_remote、write_remote、edit_remote，经 ssh 读写远程主机文件。write_remote 只允许新建，绝无覆写分支；文件后端 RemoteFileSystem 不继承 FileSystem，仅借用 @deepseek-ai/dsh-fs 的类型词表与 FsError。标准可安装的 dsh host 插件。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "ssh",
+    "remote",
+    "file",
+    "read",
+    "write",
+    "edit"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-er/dsh-remote-file-system.git"
+  },
+  "author": "betterer",
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/index.js.map",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=26.3.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "prepare": "node build.mjs",
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "diff": "^9.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-brand": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.5.0"
+  }
+}

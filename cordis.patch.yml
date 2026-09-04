@@ -1,0 +1,7 @@
+# dsh-remote-file-system bundle patch：把本插件插进 profile 的 layer stack。
+# profile 引用本 bundle 或 dev_install_package 时自动挂载，全局生效。
+- insert:
+    - id: dsh-remote-file-system
+      name: 'dsh-remote-file-system'
+      config:
+        enabled: true
