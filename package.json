@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote-file-system",
-  "version": "0.1.0",
-  "description": "模型可见的远程文件工具 read_remote、write_remote、edit_remote，经 ssh 读写远程主机文件。write_remote 只允许新建，绝无覆写分支；文件后端 RemoteFileSystem 不继承 FileSystem，仅借用 @deepseek-ai/dsh-fs 的类型词表与 FsError。标准可安装的 dsh host 插件。",
+  "version": "0.1.1",
+  "description": "「DSH·远程文件系统」：提供模型可见的远程文件工具 read_remote、write_remote、edit_remote，经 ssh 读写远程主机文件。write_remote 只允许新建，绝无覆写分支；文件后端 RemoteFileSystem 不继承 FileSystem，仅借用 @deepseek-ai/dsh-fs 的类型词表与 FsError。标准可安装的 dsh host 插件。",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -53,9 +53,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1"
+    "@deepseek-ai/dsh": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
