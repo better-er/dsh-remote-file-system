@@ -47,9 +47,10 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # 本插件只有 host 半身，无 client、无 dts，产物缺失会在此失败。
+      # 本插件只有 host 半身，无 client、无 dts、带 sourcemap，产物缺失会在此失败。
       - name: Verify build outputs
         run: |
           test -f lib/index.js
+          test -f lib/index.js.map
           test -f cordis.patch.yml
-          echo "构建产物齐全：lib/index.js · cordis.patch.yml"
+          echo "构建产物齐全：lib/index.js · lib/index.js.map · cordis.patch.yml"

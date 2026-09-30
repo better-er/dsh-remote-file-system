@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-file-system",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "「DSH·远程文件系统」：提供模型可见的远程文件工具 read_remote、write_remote、edit_remote，经 ssh 读写远程主机文件。write_remote 只允许新建，绝无覆写分支；文件后端 RemoteFileSystem 不继承 FileSystem，仅借用 @deepseek-ai/dsh-fs 的类型词表与 FsError。标准可安装的 dsh host 插件。",
   "keywords": [
     "deepseek-harness",
@@ -53,20 +53,20 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-fs": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2"
+    "@deepseek-ai/dsh": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-brand": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-session": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.5.0"
