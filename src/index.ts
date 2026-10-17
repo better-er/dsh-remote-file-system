@@ -11,6 +11,8 @@ import { RemoteFileSystem } from './remote-fs.ts'
 import { createReadRemoteTool } from './read.ts'
 import { createWriteRemoteTool } from './write.ts'
 import { createEditRemoteTool } from './edit.ts'
+import { mountRpcChannel } from './rpc-channel.ts'
+import { handleRemoteRpc } from './rpc.ts'
 
 /** 插件名，与 cordis.patch.yml 的 name 一致，loader 诊断用。 */
 export const name = 'dsh-remote-file-system'
@@ -57,4 +59,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.tools.register(createReadRemoteTool(fs))
   ctx.tools.register(createWriteRemoteTool(fs))
   ctx.tools.register(createEditRemoteTool(fs))
+
+  // 浏览器半身经这条自注册通道读取远端文本，供右侧栏预览。
+  mountRpcChannel(ctx, '/remote-file-system', (endpoint, payload) => handleRemoteRpc(fs, endpoint, payload))
 }
