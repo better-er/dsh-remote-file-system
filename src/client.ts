@@ -9,10 +9,26 @@
  * 经 Host 自注册的 /remote-file-system 通道读取远端文本并渲染。
  * 只读：写入仍走 read_remote、write_remote、edit_remote 三条工具。
  *
+ * 正文沿用内置文档预览的外观：纯文本按源码行渲染，代码文件交给共享的 CodeBlock，
+ * 头部是同样 38px 的路径栏与换行、重新加载图标按钮。
+ *
  * @module dsh-remote-file-system/client
  */
 
 import * as React from 'react'
+import {
+  CodeBlock,
+  FileTypeIcon,
+  IconNowrapFillRegular,
+  IconRefreshOutlineRegular,
+  IconWrapFillRegular,
+  Menu,
+  PathLabel,
+  StateDot,
+  Tooltip,
+  classifyFileType,
+  languageForPath,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 
 // 常量
 
@@ -109,15 +125,24 @@ interface ClientContext {
   effect(callback: () => (() => void) | void): void
 }
 
-/** 框架注入正文组件的 tab 信息钩子，由 slot 声明里的 hooks.tabInfo 转换为 useTabInfo。 */
-interface TabBodyProps {
-  useTabInfo(): {
-    tab: {
-      id: string
-      navigation: { address: string; params?: { line?: number } }
-      signal: AbortSignal
-    }
+/** 框架交给正文与标题的 tab 信息，由 slot 声明里的 hooks.tabInfo 转换为 useTabInfo。 */
+interface RemoteTabInfo {
+  tab: {
+    id: string
+    title: string
+    navigation: { address: string; params?: { line?: number } }
+    signal: AbortSignal
   }
+}
+
+/** 正文组件的注入面。 */
+interface TabBodyProps {
+  useTabInfo(): RemoteTabInfo
+}
+
+/** tab 标题组件的注入面。 */
+interface TabTitleProps {
+  useTabInfo(): RemoteTabInfo
 }
 
 // RPC 调用
@@ -167,21 +192,40 @@ interface ReadResult {
 
 // 样式注入
 
-/** 正文根节点撑满侧栏 tab 容器，工具栏固定、正文滚动。 */
+/** 预览外观对齐内置文档预览：38px 头部、13px 等宽正文与同一组图标按钮。 */
 const CSS = [
-  '.dsh-rfs-body{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1)}',
-  '.dsh-rfs-toolbar{display:flex;align-items:center;gap:8px;flex:none;padding:4px 8px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px}',
-  '.dsh-rfs-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}',
-  '.dsh-rfs-status{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
-  '.dsh-rfs-action{flex:none;padding:2px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;font-family:inherit;font-size:12px;line-height:16px}',
-  '.dsh-rfs-action:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
-  '.dsh-rfs-action:disabled{opacity:.45;cursor:default}',
-  '.dsh-rfs-scroll{flex:1;min-height:0;overflow:auto;font-family:\'Cascadia Code\',\'Fira Code\',Consolas,monospace;font-size:12px;line-height:18px;padding:4px 0}',
-  '.dsh-rfs-line{display:flex;white-space:pre;min-height:18px}',
-  '.dsh-rfs-line-active{background:var(--dsw-alias-interactive-bg-hover)}',
-  '.dsh-rfs-ln{flex:none;width:52px;padding-right:10px;text-align:right;color:var(--dsw-alias-label-secondary);user-select:none}',
-  '.dsh-rfs-text{flex:1;min-width:0}',
-  '.dsh-rfs-message{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;text-align:center;font-size:13px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1)}',
+  '.dsh-rfs-preview{flex-direction:column;flex:auto;height:100%;min-height:0;display:flex}',
+  '.dsh-rfs-header{box-sizing:border-box;border-bottom:.5px solid var(--dsw-alias-border-l3);flex:none;align-items:center;gap:4px;height:38px;padding:0 6px 0 16px;display:flex}',
+  '.dsh-rfs-path{margin-right:12px}',
+  '.dsh-rfs-titleIcon{flex:none}',
+  '.dsh-rfs-notice{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-bottom:.5px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:10px;margin:0;padding:6px 10px;font-size:12px;display:flex}',
+  '.dsh-rfs-body{--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);min-height:0;color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size-secondary,13px);font-family:var(--dsw-font-mono,ui-monospace,monospace);white-space:pre;flex:auto;margin:0;padding:0;line-height:1.6;position:relative;overflow:auto}',
+  '.dsh-rfs-body::-webkit-scrollbar-track{margin:2px}',
+  '.dsh-rfs-body[data-code]{flex-direction:column;display:flex;overflow:hidden}',
+  '.dsh-rfs-wrap{white-space:pre-wrap;word-break:break-word}',
+  '.dsh-rfs-textDocument{box-sizing:border-box;min-width:100%;min-height:100%;padding:8px}',
+  '.dsh-rfs-page{font:var(--dsw-font-markdown-code-block);white-space:inherit;margin:0}',
+  '.dsh-rfs-line{padding:0 10px}',
+  '.dsh-rfs-lineTarget{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dsh-rfs-empty{box-sizing:border-box;height:100%;color:var(--dsw-alias-label-secondary);font-size:var(--dsh-content-font-size-secondary,13px);font-family:var(--dsw-font-family);text-align:center;white-space:normal;flex-direction:column;justify-content:center;align-items:center;gap:16px;padding:0 24px;line-height:1.6;display:flex}',
+  '.dsh-rfs-empty:after{content:"";flex:0 12%}',
+  '.dsh-rfs-emptyIcon{opacity:.6;filter:grayscale();flex:none}',
+  '.dsh-rfs-emptyLine{margin:0}',
+  '.dsh-rfs-retry{height:32px;color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size-secondary,13px);border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);cursor:pointer;background:0 0;flex:none;align-items:center;gap:6px;padding:0 14px 0 12px;font-family:inherit;display:inline-flex}',
+  '.dsh-rfs-retry:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dsh-rfs-status{box-sizing:border-box;flex-direction:column;justify-content:center;align-items:center;gap:8px;height:100%;padding:12px 10px;display:flex}',
+  '.dsh-rfs-statusLine{color:var(--dsw-alias-label-secondary);font-size:var(--dsh-content-font-size-secondary,13px);white-space:normal;align-items:center;gap:10px;margin:0;padding:6px 10px;line-height:1.6;display:flex}',
+  '.dsh-rfs-tool{width:28px;height:28px;color:var(--dsw-alias-label-secondary);border-radius:var(--dsw-radius-sm);cursor:pointer;background:0 0;border:none;flex:none;justify-content:center;align-items:center;padding:6px;line-height:1;display:inline-flex}',
+  '.dsh-rfs-tool svg{width:15px;height:15px}',
+  '.dsh-rfs-tool:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dsh-rfs-viewerTool{width:auto;max-width:160px;color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:none;padding:0 6px;font-size:12px;overflow:hidden}',
+  '.dsh-rfs-code{white-space:normal;flex-direction:column;flex:auto;width:100%;min-width:0;height:100%;min-height:0;display:flex;overflow:hidden}',
+  '.dsh-rfs-code .dsh-rfs-codeblock{--dsl-code-block-border-radius:0px;--dsl-code-block-line-white-space:pre;--dsl-code-block-background:transparent;flex-direction:column;flex:auto;min-width:0;height:100%;min-height:0;margin:0;display:flex;position:static}',
+  '.dsh-rfs-code .dsh-rfs-codeblock>[data-code-block-content]{flex:auto;min-width:0;min-height:0;display:block;position:relative;overflow:auto}',
+  '.dsh-rfs-code .dsh-rfs-codeblock>[data-code-block-content]::-webkit-scrollbar-track{margin:2px}',
+  '.dsh-rfs-code .dsh-rfs-codeblock pre{box-sizing:border-box;white-space:pre;word-break:normal;overflow-wrap:normal;min-width:100%;padding:16px;overflow:visible}',
+  '.dsh-rfs-code[data-wrap=true] .dsh-rfs-codeblock{--dsl-code-block-line-white-space:pre-wrap}',
+  '.dsh-rfs-code[data-wrap=true] .dsh-rfs-codeblock pre{white-space:pre-wrap;overflow-wrap:anywhere}',
   '.dsh-rfs-root{display:flex;flex-direction:column;width:100%;min-width:0}',
   '.dsh-rfs-row{position:relative;overflow:hidden;display:flex;align-items:center;height:calc(24px + var(--dsh-content-font-delta,0px));min-width:0;color:var(--dsw-alias-label-tertiary);transition:color 100ms ease}',
   '.dsh-rfs-row[data-expandable]{cursor:pointer}',
@@ -227,18 +271,33 @@ function removeStyle(): void {
   styleTag = null
 }
 
-/** 把字节数格式化成可读文本。 */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+/** 内置预览器视为文档、不走代码渲染的语言。 */
+const DOCUMENT_LANGUAGES = new Set(['markdown', 'mdx', 'rst', 'latex', 'bibtex', 'asciidoc'])
+
+/**
+ * 按远端路径选择内置预览器会用的代码语言。
+ * 文档类语言仍按纯文本展示，与内置 Markdown 渲染器的分工一致。
+ * @param path - 远端路径。
+ * @returns 代码高亮语言，纯文本时为 null。
+ */
+function codeLanguageOf(path: string): string | null {
+  const language = languageForPath(path)
+  if (language === undefined || DOCUMENT_LANGUAGES.has(language)) return null
+  return language
+}
+
+/** 取路径最后一段，作为 tab 标题，与内置预览器的 basename 一致。 */
+function basenameOf(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  return name === '' ? path : name
 }
 
 // 正文组件
 
 /**
- * 一个 remote tab 的正文：读取远端文本、按行渲染、支持行号定位。
- * 地址解析失败或缺少服务时只渲染错误提示，不抛错崩溃。
+ * 一个 remote tab 的正文：读取远端文本，按内置文档预览的两种形态渲染。
+ * 代码文件交给共享的 CodeBlock，纯文本按源码行渲染。
+ * 地址解析失败或读取失败时只渲染原生样式的空态，不抛错崩溃。
  * @param props - 框架注入的 tab 信息钩子。
  */
 function RemoteFileBody(props: TabBodyProps): React.ReactElement {
@@ -246,15 +305,19 @@ function RemoteFileBody(props: TabBodyProps): React.ReactElement {
   const address = info.tab.navigation.address
   const params = info.tab.navigation.params
   const line = params && typeof params.line === 'number' ? params.line : undefined
-  const target = parseRemoteAddress(address)
+  const target = React.useMemo(function () { return parseRemoteAddress(address) }, [address])
+  const language = React.useMemo(function () { return target ? codeLanguageOf(target.rawPath) : null }, [target])
 
   const [phase, setPhase] = React.useState<'loading' | 'ready' | 'error'>('loading')
   const [text, setText] = React.useState('')
-  const [bytes, setBytes] = React.useState(0)
   const [truncated, setTruncated] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const [revision, setRevision] = React.useState(0)
-  const [wrap, setWrap] = React.useState(false)
+  const [wrap, setWrap] = React.useState(true)
+  // 代码文件与内置预览一样可在「代码」与「纯文本」之间切换；documents 只有一个渲染器时不显示菜单。
+  const [plain, setPlain] = React.useState(false)
+  const [menuOpen, setMenuOpen] = React.useState(false)
+  const showCode = language !== null && !plain
   const bodyRef = React.useRef<HTMLDivElement | null>(null)
 
   // 读取内容：地址变化或手动刷新即重读。取消标记避免旧请求覆盖新 tab 的正文。
@@ -270,7 +333,6 @@ function RemoteFileBody(props: TabBodyProps): React.ReactElement {
     rpcCall<ReadResult>('read', { target: target.target }, info.tab.signal).then(function (result) {
       if (cancelled) return
       setText(result.text)
-      setBytes(result.bytes)
       setTruncated(result.truncated)
       setPhase('ready')
     }).catch(function (e: unknown) {
@@ -281,14 +343,18 @@ function RemoteFileBody(props: TabBodyProps): React.ReactElement {
     return function () { cancelled = true }
   }, [address, revision])
 
-  // 内容就绪后按 navigation.params.line 把目标行滚到视野中央。
+  // 内容就绪后按 navigation.params.line 定位：与内置预览一样直接写滚动容器的 scrollTop。
   React.useEffect(function () {
     if (phase !== 'ready' || line === undefined) return
     const body = bodyRef.current
     if (body === null) return
-    const row = body.querySelector('[data-line="' + line + '"]')
-    if (row instanceof HTMLElement) row.scrollIntoView({ block: 'center' })
-  }, [phase, text, line])
+    const scroller = showCode ? body.querySelector('[data-code-block-content]') : body
+    if (!(scroller instanceof HTMLElement)) return
+    const row = showCode
+      ? body.querySelectorAll('.dsh-rfs-codeblock pre .line').item(line - 1)
+      : body.querySelector('[data-line="' + line + '"]')
+    if (row instanceof HTMLElement) scroller.scrollTop = Math.max(0, row.offsetTop)
+  }, [phase, text, line, showCode])
 
   // 按行切分，去掉尾随换行产生的空行，再按上限截断并记录是否真的截断。
   const view = React.useMemo(function () {
@@ -300,48 +366,127 @@ function RemoteFileBody(props: TabBodyProps): React.ReactElement {
 
   function refresh(): void { setRevision(function (r) { return r + 1 }) }
 
-  const status = phase === 'ready'
-    ? formatBytes(bytes) + (truncated ? ' · 已截断' : '') + (view.capped ? ' · 仅显示前 ' + MAX_RENDER_LINES + ' 行' : '')
-    : message
+  const notice = phase === 'ready' && (truncated || view.capped)
+    ? (view.capped ? '仅显示前 ' + MAX_RENDER_LINES + ' 行' : '文件较大，已截断')
+    : null
 
-  return React.createElement('div', { className: 'dsh-rfs-body' },
-    React.createElement('div', { className: 'dsh-rfs-toolbar' },
-      React.createElement('span', { className: 'dsh-rfs-title' }, target ? target.target : address),
-      React.createElement('span', { className: 'dsh-rfs-status' }, status),
-      React.createElement('button', {
-        type: 'button',
-        className: 'dsh-rfs-action',
-        onClick: function () { setWrap(function (w) { return !w }) },
-        title: '切换自动换行',
-      }, wrap ? '不换行' : '换行'),
-      React.createElement('button', {
-        type: 'button',
-        className: 'dsh-rfs-action',
-        onClick: refresh,
-        disabled: phase === 'loading',
-        title: '重新读取',
-      }, '刷新'),
-    ),
-    React.createElement('div', {
-      ref: bodyRef,
-      className: 'dsh-rfs-scroll',
-      style: wrap ? { whiteSpace: 'pre-wrap' } : undefined,
+  const body = React.createElement('div', {
+    ref: bodyRef,
+    className: wrap ? 'dsh-rfs-body dsh-rfs-wrap' : 'dsh-rfs-body',
+    ...(showCode ? { 'data-code': true } : {}),
+  },
+    phase === 'loading' ? React.createElement('div', { className: 'dsh-rfs-status' },
+      React.createElement(StateDot, { state: 'ongoing', size: 28 }),
+      React.createElement('p', { className: 'dsh-rfs-statusLine' }, '文档渲染中...'),
+    ) : null,
+    phase === 'error' ? React.createElement('div', { className: 'dsh-rfs-empty' },
+      React.createElement(FileTypeIcon, {
+        kind: classifyFileType(target ? target.rawPath : ''),
+        size: 36,
+        className: 'dsh-rfs-emptyIcon',
+      }),
+      React.createElement('p', { className: 'dsh-rfs-emptyLine' }, message),
+      React.createElement('button', { type: 'button', className: 'dsh-rfs-retry', onClick: refresh },
+        React.createElement(IconRefreshOutlineRegular, { size: 14 }),
+        '重试',
+      ),
+    ) : null,
+    phase === 'ready' && showCode ? React.createElement('div', {
+      className: 'dsh-rfs-code',
+      'data-code-preview': true,
+      'data-wrap': wrap,
     },
-      phase === 'loading' ? React.createElement('div', { className: 'dsh-rfs-message' }, '加载中...') : null,
-      phase === 'error' ? React.createElement('div', { className: 'dsh-rfs-message' }, '打开失败: ' + message) : null,
-      phase === 'ready' && view.rows.length === 0 ? React.createElement('div', { className: 'dsh-rfs-message' }, '空文件') : null,
-      phase === 'ready' ? view.rows.map(function (row, index) {
-        const number = index + 1
-        return React.createElement('div', {
-          key: number,
-          'data-line': String(number),
-          className: line === number ? 'dsh-rfs-line dsh-rfs-line-active' : 'dsh-rfs-line',
+      React.createElement(CodeBlock, {
+        className: 'dsh-rfs-codeblock',
+        code: view.rows.join('\n'),
+        lang: language,
+        streaming: false,
+        lineNumbers: true,
+        wrap,
+        copyLabel: '复制',
+        copiedLabel: '已复制',
+        toolbarLabels: {
+          codeLabel: '代码',
+          wrapLabel: '启用自动换行',
+          unwrapLabel: '关闭自动换行',
         },
-          React.createElement('span', { className: 'dsh-rfs-ln' }, String(number)),
-          React.createElement('span', { className: 'dsh-rfs-text' }, row),
-        )
+      }),
+    ) : null,
+    phase === 'ready' && !showCode ? React.createElement('div', {
+      className: 'dsh-rfs-textDocument',
+      'data-textpreview-plain': true,
+    },
+      React.createElement('pre', { className: 'dsh-rfs-page' },
+        view.rows.map(function (row, index) {
+          const number = index + 1
+          return React.createElement('div', {
+            key: number,
+            'data-line': String(number),
+            className: line === number ? 'dsh-rfs-line dsh-rfs-lineTarget' : 'dsh-rfs-line',
+          }, row, '\n')
+        }),
+      ),
+    ) : null,
+  )
+
+  return React.createElement('div', { className: 'dsh-rfs-preview' },
+    notice !== null ? React.createElement('p', { className: 'dsh-rfs-notice' },
+      React.createElement('span', null, notice),
+    ) : null,
+    React.createElement('div', { className: 'dsh-rfs-header' },
+      React.createElement(PathLabel, {
+        path: target ? target.target : address,
+        className: 'dsh-rfs-path',
+      }),
+      language !== null ? React.createElement(Menu, {
+        open: menuOpen,
+        anchor: React.createElement('button', {
+          type: 'button',
+          className: 'dsh-rfs-tool dsh-rfs-viewerTool',
+          'aria-label': '打开方式',
+          title: plain ? '纯文本' : '代码',
+          'data-document-viewer-menu': true,
+          onClick: function () { setMenuOpen(function (v) { return !v }) },
+        }, plain ? '纯文本' : '代码'),
+        items: [
+          { id: 'code', label: '代码' },
+          { id: 'plain', label: '纯文本' },
+        ],
+        selectedId: plain ? 'plain' : 'code',
+        onSelect: function (id: string) {
+          setPlain(id === 'plain')
+          setMenuOpen(false)
+        },
+        onClose: function () { setMenuOpen(false) },
+        align: 'end',
+        portal: true,
+        dense: true,
       }) : null,
+      React.createElement(Tooltip, {
+        label: wrap ? '关闭自动换行' : '启用自动换行',
+        side: 'bottom',
+        delayMs: 500,
+        children: React.createElement('button', {
+          type: 'button',
+          className: 'dsh-rfs-tool',
+          'aria-pressed': wrap,
+          'aria-label': '自动换行',
+          onClick: function () { setWrap(function (w) { return !w }) },
+        }, wrap ? React.createElement(IconNowrapFillRegular, {}) : React.createElement(IconWrapFillRegular, {})),
+      }),
+      React.createElement(Tooltip, {
+        label: '重新加载',
+        side: 'bottom',
+        delayMs: 500,
+        children: React.createElement('button', {
+          type: 'button',
+          className: 'dsh-rfs-tool',
+          'aria-label': '重新加载',
+          onClick: refresh,
+        }, React.createElement(IconRefreshOutlineRegular, {})),
+      })
     ),
+    body,
   )
 }
 
@@ -483,6 +628,24 @@ function ReadRemoteRow(props: ToolViewProps): React.ReactElement {
   )
 }
 
+// tab 标题
+
+/**
+ * tab 条上的标题：文件类型图标加文件名，与内置文档预览的 TextTitle 同构。
+ * @param props - 框架注入的 tab 信息钩子。
+ */
+function RemoteFileTitle(props: TabTitleProps): React.ReactElement {
+  const info = props.useTabInfo()
+  return React.createElement(React.Fragment, null,
+    React.createElement(FileTypeIcon, {
+      kind: classifyFileType(info.tab.title),
+      size: 16,
+      className: 'dsh-rfs-titleIcon',
+    }),
+    info.tab.title,
+  )
+}
+
 // 插件入口
 
 /** 插件名，与 cordis.patch.yml 的 name 一致。 */
@@ -520,7 +683,7 @@ export function apply(ctx: ClientContext): void {
       canOpen: function (address) { return parseRemoteAddress(address) !== null },
       title: function (address) {
         const parsed = parseRemoteAddress(address)
-        return parsed ? parsed.target : address
+        return parsed ? basenameOf(parsed.rawPath) : address
       },
       keepMounted: true,
     })
@@ -528,6 +691,10 @@ export function apply(ctx: ClientContext): void {
 
   slots.inject('sidebar.right.pane.tab', function () {
     return slots.register({ name: 'sidebar.right.pane.tab', key: TYPE_ID }, RemoteFileBody)
+  })
+
+  slots.inject('sidebar.right.pane.tab.title', function () {
+    return slots.register({ name: 'sidebar.right.pane.tab.title', key: TYPE_ID }, RemoteFileTitle)
   })
 
   // read_remote 的工具卡原本没有打开文件的入口，接管它并给出可点击路径。

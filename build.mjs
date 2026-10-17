@@ -51,7 +51,8 @@ const clientOptions = {
   outfile: 'lib/client.js',
   sourcemap: true,
   logLevel: 'info',
-  external: ['react'],
+  // 宿主模块表提供 react 与 primitives，不能打进 bundle，否则图标与主题样式会成为第二份实现
+  external: ['react', '@deepseek-ai/dsh-client-ui-primitives'],
   charset: 'utf8',
   banner: { js: 'window.__ModuleLoader__.load({ id: "dsh-remote-file-system", factory: (require) => { var module = { exports: {} }; var exports = module.exports;' },
   footer: { js: 'return module.exports; } });' },
