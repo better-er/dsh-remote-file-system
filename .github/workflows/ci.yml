@@ -47,10 +47,16 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # 本插件只有 host 半身，无 client、无 dts、带 sourcemap，产物缺失会在此失败。
+      # 只依赖源码与 node 内置模块，不加载 @deepseek-ai 包，可在 CI 直接跑。
+      - name: RPC smoke
+        run: node smoke/rpc-smoke.mjs
+
+      # 本插件是 host 与 client 双半身、无 dts、带 sourcemap，产物缺失会在此失败。
       - name: Verify build outputs
         run: |
           test -f lib/index.js
           test -f lib/index.js.map
+          test -f lib/client.js
+          test -f lib/client.js.map
           test -f cordis.patch.yml
-          echo "构建产物齐全：lib/index.js · lib/index.js.map · cordis.patch.yml"
+          echo "构建产物齐全：lib/index.js · lib/index.js.map · lib/client.js · lib/client.js.map · cordis.patch.yml"

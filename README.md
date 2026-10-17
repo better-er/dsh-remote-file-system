@@ -1,6 +1,6 @@
 # DSH·远程文件系统
 
-模型可见的远程文件工具 `read_remote`、`write_remote`、`edit_remote`，经 ssh 读写远程主机文件。标准可安装的 dsh host 插件。
+模型可见的远程文件工具 `read_remote`、`write_remote`、`edit_remote`，经 ssh 读写远程主机文件；并在 Web 右侧栏以 `remote` tab 预览远程文本。标准可安装的 dsh host 与 client 插件。
 
 ## 引言
 
@@ -17,6 +17,14 @@ DSH 只有本地文件系统的读写能力，而读写远程文件只能用 Pow
 | `read_remote` | 读远端 UTF-8 文本，行号分页 | offset、limit、totalLines，与原生 read 一致 |
 | `write_remote` | 远端新建文件 | 只允许新建，目标已存在即拒绝，绝无覆写分支 |
 | `edit_remote` | 远端字面替换 | 唯一匹配，多现拒绝，未命中报错；支持 replace_all |
+
+### 右侧栏预览
+
+内置查看器只认主机本地文件：点开 `wsl:~/x.md` 时地址是 `dsh-resource://file/session/<id>/wsl:~/x.md`，内置 `text` 类型经 `ctx.fs` 在本地查找而失败。
+
+client 半身注册 `remote` tab 类型，以 extension 优先级认领这类能解析出远程别名的地址，经 Host 自注册的 `/remote-file-system` 通道读取远端文本，按行渲染并支持 `params.line` 定位与手动刷新。本地文件仍由内置查看器处理。
+
+`read_remote` 的工具卡按工具名接管，卡内路径是可点击链接，点击即在右侧栏打开对应的 remote tab；点整行可展开结果文本。内置 read 卡只按工具名 `read` 注册，`read_remote` 没有条目而走通用行，也就没有打开文件的入口，故由本插件补上。
 
 ## file_path 写法
 
@@ -45,7 +53,7 @@ myserver:/etc/hosts
 dsh plugin --profile web add github:better-er/dsh-remote-file-system
 ```
 
-**从 npm 安装**：包内已含构建产物 `lib/index.js`，安装时不再构建。
+**从 npm 安装**：包内已含构建产物 `lib/index.js` 与 `lib/client.js`，安装时不再构建。
 
 ```powershell
 dsh plugin --profile web add dsh-remote-file-system
@@ -65,13 +73,16 @@ dsh plugin --profile web remove dsh-remote-file-system
 
 文件后端 `RemoteFileSystem` 刻意不继承 `@deepseek-ai/dsh-fs` 的 `FileSystem` 与 cordis `Service`，避免「继承即注册」污染会话 `ctx.fs`；只借用 `dsh-fs` 类型词表与 `FsError`。字节经 base64 再经 ssh 传输。
 
+浏览器半身经 Host 自注册的 `/remote-file-system` 通道读取远端文本，复用 `connection.requestRejection` 做 Host 校验与浏览器鉴权，与 dsh-classic-coding 的 `src/rpc-channel.ts` 同源。
+
 ## 开发
 
 ```powershell
 pnpm install      # 装依赖，含 devDeps 类型与 esbuild
-pnpm build        # esbuild 打包 host 半身到 lib/
+pnpm build        # esbuild 打包 host 与 client 半身到 lib/
 pnpm typecheck
-node smoke/verify.mjs   # 手动组装最小 cordis 组合，对 wsl 冒烟三工具
+node smoke/verify.mjs     # 手动组装最小 cordis 组合，对 wsl 冒烟三工具
+node smoke/rpc-smoke.mjs  # 对源码的 RPC 通道做信封级冒烟，不依赖 @deepseek-ai 包
 ```
 
 ## 依赖与构建注意

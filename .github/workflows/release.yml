@@ -100,7 +100,7 @@ jobs:
         if: steps.published.outputs.published != 'true'
         run: pnpm install --frozen-lockfile
 
-      # 本插件暂无单测，以类型检查作为发布前的最后一道门。
+      # 类型检查与 RPC 冒烟是发布前的门，冒烟排在 Build 之后。
       - name: Typecheck
         if: steps.published.outputs.published != 'true'
         run: pnpm typecheck
@@ -109,14 +109,20 @@ jobs:
         if: steps.published.outputs.published != 'true'
         run: pnpm build
 
+      - name: RPC smoke
+        if: steps.published.outputs.published != 'true'
+        run: node smoke/rpc-smoke.mjs
+
       # 与 CI 共用同一份产物清单，按插件形态增删条目，产物缺失会在此失败。
       - name: Verify build outputs
         if: steps.published.outputs.published != 'true'
         run: |
           test -f lib/index.js
           test -f lib/index.js.map
+          test -f lib/client.js
+          test -f lib/client.js.map
           test -f cordis.patch.yml
-          echo "构建产物齐全：lib/index.js · lib/index.js.map · cordis.patch.yml"
+          echo "构建产物齐全：lib/index.js · lib/index.js.map · lib/client.js · lib/client.js.map · cordis.patch.yml"
 
       # Trusted Publishing：npm 凭 workflow 的 OIDC 身份直接授权，无需 NPM_TOKEN；--provenance 会在 npm 上附构建来源证明。
       - name: Publish to npm
