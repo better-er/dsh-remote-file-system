@@ -92,3 +92,5 @@ node smoke/rpc-smoke.mjs  # 对源码的 RPC 通道做信封级冒烟，不依�
 ## License
 
 [MIT](./LICENSE)
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

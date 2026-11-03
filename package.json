@@ -61,9 +61,6 @@
     "typecheck": "tsc --noEmit",
     "smoke:rpc": "node smoke/rpc-smoke.mjs"
   },
-  "dependencies": {
-    "diff": "^9.0.0"
-  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh": "^0.2.0-rc.2",
@@ -84,6 +81,7 @@
     "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
     "@types/node": "^22.0.0",
     "@types/react": "~18.3.1",
+    "diff": "^9.0.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.5.0"
   }
