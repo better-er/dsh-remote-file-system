@@ -18,6 +18,8 @@ DSH 只有本地文件系统的读写能力，而读写远程文件只能用 Pow
 | `write_remote` | 远端新建文件 | 只允许新建，目标已存在即拒绝，绝无覆写分支 |
 | `edit_remote` | 远端字面替换 | 唯一匹配，多现拒绝，未命中报错；支持 replace_all |
 
+`read_remote` 只接受有效 UTF-8，读到非文本报 `FS_NOT_TEXT`。`edit_remote` 会核对上一次读取的内容指纹，读完之后文件被外部改过时报 `FS_STALE_VERSION`，需要重新读取再编辑。
+
 ### 右侧栏预览
 
 内置查看器只认主机本地文件：点开 `wsl:~/x.md` 时地址是 `dsh-resource://file/session/<id>/wsl:~/x.md`，内置 `text` 类型经 `ctx.fs` 在本地查找而失败。
@@ -33,9 +35,10 @@ ssh 目标与远程路径合在一个 `file_path` 字段，沿用「别名:路�
 ```text
 wsl:~/x.md
 myserver:/etc/hosts
+winbox:D:/work/test.txt
 ```
 
-只收绝对路径或 ~/ 开头；裸相对路径直接拒绝。
+只收绝对路径、~/ 或盘符开头；裸相对路径直接拒绝。远端是 Windows 时路径原样交给 PowerShell，反斜杠与正斜杠都认。
 
 ## 宣传片
 
@@ -73,6 +76,8 @@ dsh plugin --profile web remove dsh-remote-file-system
 
 文件后端 `RemoteFileSystem` 刻意不继承 `@deepseek-ai/dsh-fs` 的 `FileSystem` 与 cordis `Service`，避免「继承即注册」污染会话 `ctx.fs`；只借用 `dsh-fs` 类型词表与 `FsError`。字节经 base64 再经 ssh 传输。
 
+远端平台按别名探测一次并缓存：能跑通 `cmd /c echo Windows_NT` 判为 Windows，否则按 POSIX。POSIX 走 `bash -s`，Windows 走 `powershell -EncodedCommand`，脚本不进命令行以免被 32k 上限卡住，写入的数据经 stdin 传。
+
 浏览器半身经 Host 自注册的 `/remote-file-system` 通道读取远端文本，复用 `connection.requestRejection` 做 Host 校验与浏览器鉴权，与 dsh-classic-coding 的 `src/rpc-channel.ts` 同源。
 
 ## 开发
@@ -82,6 +87,7 @@ pnpm install      # 装依赖，含 devDeps 类型与 esbuild
 pnpm build        # esbuild 打包 host 与 client 半身到 lib/
 pnpm typecheck
 node smoke/verify.mjs     # 手动组装最小 cordis 组合，对 wsl 冒烟三工具
+node smoke/remote-win-smoke.mjs  # 对 Windows 远端的 stat/read/edit/write 冒烟
 node smoke/rpc-smoke.mjs  # 对源码的 RPC 通道做信封级冒烟，不依赖 @deepseek-ai 包
 ```
 
