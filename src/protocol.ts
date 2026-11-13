@@ -19,6 +19,27 @@ export function b64(input: string): string { return Buffer.from(input, 'utf8').t
 /** base64 解码为 utf8。 */
 export function b64d(input: string): string { return Buffer.from(input, 'base64').toString('utf8') }
 
+/** 远端平台。POSIX 走 bash -s，Windows 走 powershell -Command -。 */
+export type RemotePlatform = 'posix' | 'windows'
+const PLATFORM_CACHE = new Map<string, RemotePlatform>()
+/** Windows 分支的调用：脚本经 -EncodedCommand 传，数据经 stdin 传。 */
+export interface WinInvocation { script: string; input?: string }
+
+/** 把多行 PowerShell 脚本编码成 -EncodedCommand，避免 stdin 被逐行解析拆坏 try 块。 */
+export function windowsCommand(script: string): string {
+  return 'powershell -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(script, 'utf16le').toString('base64')
+}
+
+/** 探测远端平台，结果按别名缓存。cmd 能跑通就是 Windows。 */
+export async function detectPlatform(alias: string): Promise<RemotePlatform> {
+  const hit = PLATFORM_CACHE.get(alias)
+  if (hit) return hit
+  const raw = await sshExec(alias, {}, '', { timeoutMs: 15_000 }, 'cmd /c echo Windows_NT')
+  const platform: RemotePlatform = /Windows_NT/.test(raw.stdout) ? 'windows' : 'posix'
+  PLATFORM_CACHE.set(alias, platform)
+  return platform
+}
+
 /**
  * 在远端 bash 里解码 RM_PATH 环境变量并做 ~/ 展开。返回一段可拼进脚本前部的代码。
  * 注：不直接内嵌复杂 bash，只用最简 case，~/ 展开交给远端 $HOME。
@@ -49,6 +70,7 @@ export async function sshExec(
   env: Record<string, string>,
   scriptBody: string,
   opts: { timeoutMs?: number } = {},
+  remoteCommand?: string,
 ): Promise<SshRawResult> {
   const timeoutMs = opts.timeoutMs ?? 30_000
   return await new Promise<SshRawResult>((resolve, reject) => {
@@ -56,7 +78,7 @@ export async function sshExec(
       '-o', 'BatchMode=yes',
       '-o', 'ConnectTimeout=' + Math.max(1, Math.floor(timeoutMs / 1000)),
       alias,
-      envPrefix(env),
+      remoteCommand ?? envPrefix(env),
     ], { stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
@@ -89,8 +111,17 @@ export async function sshOutcome(
   env: Record<string, string>,
   scriptBody: string,
   opts: { timeoutMs?: number } = {},
+  win?: WinInvocation,
 ): Promise<{ code: string; stdout: string }> {
-  const raw = await sshExec(alias, env, scriptBody, opts).catch((e: Error) => {
+  const platform = await detectPlatform(alias)
+  let body = scriptBody
+  let remoteCommand: string | undefined
+  if (platform === 'windows') {
+    if (!win) throw new FsError('该操作缺少 Windows 版本的远端脚本', 'FS_IO_ERROR')
+    body = win.input ?? ''
+    remoteCommand = windowsCommand(win.script)
+  }
+  const raw = await sshExec(alias, env, body, opts, remoteCommand).catch((e: Error) => {
     throw new FsError(e.message, 'FS_IO_ERROR')
   })
   if (raw.exitCode === -1) throw new FsError('远程执行超时', 'FS_IO_ERROR')

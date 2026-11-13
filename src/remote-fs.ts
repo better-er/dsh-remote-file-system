@@ -36,6 +36,17 @@ async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 const ALIAS_RE = /^[A-Za-z0-9._-]+$/
 
+/** 生成 Windows 分支的公共前导：解码路径、展开 ~/、统一错误输出。 */
+function winPrologue(rawPath: string): string {
+  return [
+    "$ErrorActionPreference='Stop'",
+    'function Die($c,$m){ [Console]::Error.WriteLine("__ERR__"+$c+"__"+$m); exit 1 }',
+    'function Decode($s){ [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) }',
+    "$P = Decode('" + b64(rawPath) + "')",
+    "if ($P.StartsWith('~/')) { $P = Join-Path $env:USERPROFILE $P.Substring(2) }",
+  ].join('\n')
+}
+
 /** 解析「别名:路径」。路径须绝对或 ~/ 开头，裸相对路径拒绝。 */
 export function splitAliasPath(filePath: string): { alias: string; rawPath: string } {
   const idx = filePath.indexOf(':')
@@ -43,8 +54,9 @@ export function splitAliasPath(filePath: string): { alias: string; rawPath: stri
   const alias = filePath.slice(0, idx)
   const rawPath = filePath.slice(idx + 1)
   if (!ALIAS_RE.test(alias)) throw new FsError('非法的别名前缀：' + alias, 'FS_IO_ERROR')
-  if (!(rawPath.startsWith('/') || rawPath.startsWith('~/'))) {
-    throw new FsError('远程路径只接受绝对路径或 ~/ 开头，收到相对路径：' + rawPath, 'FS_IO_ERROR')
+  const winAbs = /^[A-Za-z]:[\\/]/.test(rawPath)
+  if (!(rawPath.startsWith('/') || rawPath.startsWith('~/') || winAbs)) {
+    throw new FsError('远程路径只接受绝对路径、~/ 或盘符开头，收到相对路径：' + rawPath, 'FS_IO_ERROR')
   }
   return { alias, rawPath }
 }
@@ -86,7 +98,17 @@ export class RemoteFileSystem {
       'MT=$(stat -c %Y "$P" 2>/dev/null || echo 0)',
       'echo "FILE:$SIZE:$MT"',
     ].join('\n')
-    const out = await sshOutcome(alias, env, action)
+    const winScript = [
+      winPrologue(rawPath),
+      'try {',
+      '  $i = Get-Item -LiteralPath $P -Force -ErrorAction Stop',
+      "  if ($i.PSIsContainer) { 'DIR' }",
+      "  elseif ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { 'OTHER' }",
+      "  elseif ($i -is [IO.FileInfo]) { 'FILE:' + $i.Length + ':' + ([DateTimeOffset]$i.LastWriteTimeUtc).ToUnixTimeSeconds() }",
+      "  else { 'OTHER' }",
+      "} catch { 'ABSENT' }",
+    ].join('\n')
+    const out = await sshOutcome(alias, env, action, {}, { script: winScript })
     const s = out.stdout.trim()
     if (s === 'ABSENT') return undefined
     if (s === 'DIR') return { version: FsVersion('dir:' + Date.now()), type: 'directory' }
@@ -119,7 +141,15 @@ export class RemoteFileSystem {
       'if [ -n "$SIZE" ] && [ "$SIZE" -gt "$RM_MAX" ] 2>/dev/null; then die FS_TOO_LARGE 文件超过单次读取上限，不做流式; exit 0; fi',
       'base64 -w0 < "$P" 2>/dev/null || die FS_IO_ERROR 读取内容失败',
     ].join('\n')
-    const out = await sshOutcome(alias, env, action)
+    const winScript = [
+      winPrologue(rawPath),
+      "if (-not (Test-Path -LiteralPath $P)) { Die 'FS_NOT_FOUND' 'file not found'; exit 0 }",
+      "if (Test-Path -LiteralPath $P -PathType Container) { Die 'FS_NOT_REGULAR_FILE' 'path is a directory'; exit 0 }",
+      '$b = [IO.File]::ReadAllBytes($P)',
+      'if ($b.Length -gt ' + this.readMaxBytes + ") { Die 'FS_TOO_LARGE' 'file too large'; exit 0 }",
+      '[Convert]::ToBase64String($b)',
+    ].join('\n')
+    const out = await sshOutcome(alias, env, action, {}, { script: winScript })
     return Buffer.from(out.stdout.replace(/\s+$/u, ''), 'base64').toString('utf8')
   }
 
@@ -156,7 +186,26 @@ export class RemoteFileSystem {
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 发布失败; exit 0; }',
       'echo OK',
     ].join('\n')
-    await sshOutcome(alias, env, action)
+    const winScript = [
+      winPrologue(rawPath),
+      '$in = [Console]::In.ReadToEnd()',
+      '$data = [Convert]::FromBase64String($in.Trim())',
+      "if (Test-Path -LiteralPath $P) { Die 'FS_NOT_OBSERVED' 'file already exists'; exit 0 }",
+      '$dir = [IO.Path]::GetDirectoryName($P)',
+      "if (-not $dir) { $dir = '.' }",
+      "if (-not (Test-Path -LiteralPath $dir)) { Die 'FS_IO_ERROR' 'directory missing'; exit 0 }",
+      '$tmp = Join-Path $dir ([IO.Path]::GetRandomFileName())',
+      '[IO.File]::WriteAllBytes($tmp, $data)',
+      'try {',
+      "  if (Test-Path -LiteralPath $P) { throw 'exists' }",
+      '  Move-Item -LiteralPath $tmp -Destination $P -ErrorAction Stop',
+      '} catch {',
+      '  Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue',
+      "  Die 'FS_NOT_OBSERVED' 'file already exists'; exit 0",
+      '}',
+      "'OK'",
+    ].join('\n')
+    await sshOutcome(alias, env, action, {}, { script: winScript, input: data })
     return { operation: 'create', version: FsVersion('w:' + Date.now()), before: null, after: content }
   }
 
@@ -175,7 +224,19 @@ export class RemoteFileSystem {
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 替换失败; exit 0; }',
       'echo OK',
     ].join('\n')
-    await sshOutcome(alias, env, action)
+    const winScript = [
+      winPrologue(rawPath),
+      '$in = [Console]::In.ReadToEnd()',
+      '$data = [Convert]::FromBase64String($in.Trim())',
+      '$dir = [IO.Path]::GetDirectoryName($P)',
+      "if (-not $dir) { $dir = '.' }",
+      '$tmp = Join-Path $dir ([IO.Path]::GetRandomFileName())',
+      '[IO.File]::WriteAllBytes($tmp, $data)',
+      "if (-not (Test-Path -LiteralPath $P)) { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue; Die 'FS_NOT_FOUND' 'file missing'; exit 0 }",
+      'try { Move-Item -LiteralPath $tmp -Destination $P -Force -ErrorAction Stop } catch { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue; Die \'FS_IO_ERROR\' \'replace failed\'; exit 0 }',
+      "'OK'",
+    ].join('\n')
+    await sshOutcome(alias, env, action, {}, { script: winScript, input: data })
     return content
   }
 
