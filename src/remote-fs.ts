@@ -144,13 +144,14 @@ export class RemoteFileSystem {
     if (expected !== undefined && expected.kind !== 'createIfAbsent') {
       throw new FsError('write_remote 只允许新建，仅支持 createIfAbsent 意图', 'FS_NOT_OBSERVED')
     }
-    const env = { RM_PATH: b64(rawPath), RM_DATA: b64(content) }
+    const env = { RM_PATH: b64(rawPath) }
+    const data = b64(content)
     const action = [
       PATH_PROLOGUE,
       DIE_HELPER,
       'TMP=$(mktemp "$P.XXXXXXXX.tmp" 2>/dev/null)',
       'if [ -z "$TMP" ]; then die FS_IO_ERROR 无法创建临时文件，目录可能不可写; exit 0; fi',
-      'printf %s "$(b64d "$RM_DATA")" > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }',
+      `printf %s '${data}' | base64 -d > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }`,
       'if [ -e "$P" ] || [ -L "$P" ]; then rm -f "$TMP"; die FS_NOT_OBSERVED 文件已存在，write_remote 只允许新建; exit 0; fi',
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 发布失败; exit 0; }',
       'echo OK',
@@ -162,13 +163,14 @@ export class RemoteFileSystem {
   /** 编辑后写回，整块替换。 */
   private async writeReplaced(target: FsTarget, content: string): Promise<string> {
     const { alias, rawPath } = splitAliasPath(target.displayPath)
-    const env = { RM_PATH: b64(rawPath), RM_DATA: b64(content) }
+    const env = { RM_PATH: b64(rawPath) }
+    const data = b64(content)
     const action = [
       PATH_PROLOGUE,
       DIE_HELPER,
       'TMP=$(mktemp "$P.XXXXXXXX.tmp" 2>/dev/null)',
       'if [ -z "$TMP" ]; then die FS_IO_ERROR 无法创建临时文件; exit 0; fi',
-      'printf %s "$(b64d "$RM_DATA")" > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }',
+      `printf %s '${data}' | base64 -d > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }`,
       'if [ ! -e "$P" ]; then rm -f "$TMP"; die FS_NOT_FOUND 文件已不存在; exit 0; fi',
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 替换失败; exit 0; }',
       'echo OK',
