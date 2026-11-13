@@ -18,6 +18,8 @@ DSH 只有本地文件系统的读写能力，而读写远程文件只能用 Pow
 | `write_remote` | 远端新建文件 | 只允许新建，目标已存在即拒绝，绝无覆写分支 |
 | `edit_remote` | 远端字面替换 | 唯一匹配，多现拒绝，未命中报错；支持 replace_all |
 
+`read_remote` 只接受有效 UTF-8，读到非文本报 `FS_NOT_TEXT`。`edit_remote` 会核对上一次读取的内容指纹，读完之后文件被外部改过时报 `FS_STALE_VERSION`，需要重新读取再编辑。
+
 ### 右侧栏预览
 
 内置查看器只认主机本地文件：点开 `wsl:~/x.md` 时地址是 `dsh-resource://file/session/<id>/wsl:~/x.md`，内置 `text` 类型经 `ctx.fs` 在本地查找而失败。

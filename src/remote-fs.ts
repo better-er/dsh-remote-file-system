@@ -23,6 +23,7 @@ import type {
   FsWriteIntent,
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
+import { createHash } from 'node:crypto'
 import { b64, PATH_PROLOGUE, DIE_HELPER, B64_HELPER, sshOutcome } from './protocol.ts'
 
 /** 每 targetKey 串行队列，维护每个 key 的尾 Promise。 */
@@ -67,6 +68,13 @@ export function splitAliasPath(filePath: string): { alias: string; rawPath: stri
 export class RemoteFileSystem {
   /** 单次读取字节上限，超限拒绝且不做流式，见 DESIGN §7 资源上限。 */
   readonly readMaxBytes = 50 * 1024 * 1024
+
+  /** 读过的内容指纹，供 editText 判断「读到之后又被改过」。只在 host 进程内有效。 */
+  private readonly observed = new Map<string, string>()
+
+  private fingerprint(text: string): string {
+    return createHash('sha256').update(text, 'utf8').digest('hex')
+  }
 
   /** 解析「别名:路径」为稳定 FsTarget。targetKey 含 alias 与 rawPath，displayPath 即原名。 */
   async resolve(path: string): Promise<FsTarget> {
@@ -125,7 +133,11 @@ export class RemoteFileSystem {
 
   /** 读整文件 utf8。缺失归 FS_NOT_FOUND，非普通归 FS_NOT_REGULAR_FILE，超限归 FS_TOO_LARGE。 */
   async readText(target: FsTarget): Promise<string> {
-    return withLock(target.targetKey, () => this.readTextLocked(target))
+    return withLock(target.targetKey, async () => {
+      const text = await this.readTextLocked(target)
+      this.observed.set(target.targetKey, this.fingerprint(text))
+      return text
+    })
   }
 
   private async readTextLocked(target: FsTarget): Promise<string> {
@@ -137,6 +149,7 @@ export class RemoteFileSystem {
       'if [ ! -e "$P" ] && [ ! -L "$P" ]; then die FS_NOT_FOUND 文件不存在; exit 0; fi',
       'if [ -d "$P" ]; then die FS_NOT_REGULAR_FILE 目标是一个目录; exit 0; fi',
       'if [ ! -f "$P" ]; then die FS_NOT_REGULAR_FILE 目标不是普通文件; exit 0; fi',
+      'if [ ! -r "$P" ]; then die FS_PERMISSION_DENIED 没有读取权限; exit 0; fi',
       'SIZE=$(wc -c < "$P" 2>/dev/null | tr -d " ")',
       'if [ -n "$SIZE" ] && [ "$SIZE" -gt "$RM_MAX" ] 2>/dev/null; then die FS_TOO_LARGE 文件超过单次读取上限，不做流式; exit 0; fi',
       'base64 -w0 < "$P" 2>/dev/null || die FS_IO_ERROR 读取内容失败',
@@ -145,12 +158,23 @@ export class RemoteFileSystem {
       winPrologue(rawPath),
       "if (-not (Test-Path -LiteralPath $P)) { Die 'FS_NOT_FOUND' 'file not found'; exit 0 }",
       "if (Test-Path -LiteralPath $P -PathType Container) { Die 'FS_NOT_REGULAR_FILE' 'path is a directory'; exit 0 }",
-      '$b = [IO.File]::ReadAllBytes($P)',
+      'try {',
+      '  $b = [IO.File]::ReadAllBytes($P)',
+      '} catch [System.UnauthorizedAccessException] {',
+      "  Die 'FS_PERMISSION_DENIED' 'permission denied'; exit 0",
+      '} catch {',
+      "  Die 'FS_IO_ERROR' $_.Exception.Message; exit 0",
+      '}',
       'if ($b.Length -gt ' + this.readMaxBytes + ") { Die 'FS_TOO_LARGE' 'file too large'; exit 0 }",
       '[Convert]::ToBase64String($b)',
     ].join('\n')
     const out = await sshOutcome(alias, env, action, {}, { script: winScript })
-    return Buffer.from(out.stdout.replace(/\s+$/u, ''), 'base64').toString('utf8')
+    const raw = Buffer.from(out.stdout.replace(/\s+$/u, ''), 'base64')
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(raw)
+    } catch {
+      throw new FsError('目标不是有效的 UTF-8 文本', 'FS_NOT_TEXT')
+    }
   }
 
   /** readBytes：raw 读取，文本只读，返回 utf8 字节。 */
@@ -179,8 +203,11 @@ export class RemoteFileSystem {
     const action = [
       PATH_PROLOGUE,
       DIE_HELPER,
+      'D=$(dirname "$P")',
+      'if [ ! -d "$D" ]; then die FS_NOT_FOUND 目标目录不存在; exit 0; fi',
+      'if [ ! -w "$D" ]; then die FS_PERMISSION_DENIED 目标目录不可写; exit 0; fi',
       'TMP=$(mktemp "$P.XXXXXXXX.tmp" 2>/dev/null)',
-      'if [ -z "$TMP" ]; then die FS_IO_ERROR 无法创建临时文件，目录可能不可写; exit 0; fi',
+      'if [ -z "$TMP" ]; then die FS_IO_ERROR 无法创建临时文件; exit 0; fi',
       `printf %s '${data}' | base64 -d > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }`,
       'if [ -e "$P" ] || [ -L "$P" ]; then rm -f "$TMP"; die FS_NOT_OBSERVED 文件已存在，write_remote 只允许新建; exit 0; fi',
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 发布失败; exit 0; }',
@@ -193,9 +220,15 @@ export class RemoteFileSystem {
       "if (Test-Path -LiteralPath $P) { Die 'FS_NOT_OBSERVED' 'file already exists'; exit 0 }",
       '$dir = [IO.Path]::GetDirectoryName($P)',
       "if (-not $dir) { $dir = '.' }",
-      "if (-not (Test-Path -LiteralPath $dir)) { Die 'FS_IO_ERROR' 'directory missing'; exit 0 }",
+      "if (-not (Test-Path -LiteralPath $dir)) { Die 'FS_NOT_FOUND' 'directory missing'; exit 0 }",
       '$tmp = Join-Path $dir ([IO.Path]::GetRandomFileName())',
-      '[IO.File]::WriteAllBytes($tmp, $data)',
+      'try {',
+      '  [IO.File]::WriteAllBytes($tmp, $data)',
+      '} catch [System.UnauthorizedAccessException] {',
+      "  Die 'FS_PERMISSION_DENIED' 'permission denied'; exit 0",
+      '} catch {',
+      "  Die 'FS_IO_ERROR' $_.Exception.Message; exit 0",
+      '}',
       'try {',
       "  if (Test-Path -LiteralPath $P) { throw 'exists' }",
       '  Move-Item -LiteralPath $tmp -Destination $P -ErrorAction Stop',
@@ -206,6 +239,7 @@ export class RemoteFileSystem {
       "'OK'",
     ].join('\n')
     await sshOutcome(alias, env, action, {}, { script: winScript, input: data })
+    this.observed.set(target.targetKey, this.fingerprint(content))
     return { operation: 'create', version: FsVersion('w:' + Date.now()), before: null, after: content }
   }
 
@@ -217,10 +251,13 @@ export class RemoteFileSystem {
     const action = [
       PATH_PROLOGUE,
       DIE_HELPER,
+      'D=$(dirname "$P")',
+      'if [ ! -d "$D" ]; then die FS_NOT_FOUND 目标目录不存在; exit 0; fi',
       'TMP=$(mktemp "$P.XXXXXXXX.tmp" 2>/dev/null)',
       'if [ -z "$TMP" ]; then die FS_IO_ERROR 无法创建临时文件; exit 0; fi',
       `printf %s '${data}' | base64 -d > "$TMP" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR 写入临时文件失败; exit 0; }`,
       'if [ ! -e "$P" ]; then rm -f "$TMP"; die FS_NOT_FOUND 文件已不存在; exit 0; fi',
+      'if [ ! -w "$P" ]; then rm -f "$TMP"; die FS_PERMISSION_DENIED 文件不可写; exit 0; fi',
       'mv -f "$TMP" "$P" 2>/dev/null || { rm -f "$TMP"; die FS_IO_ERROR mv 替换失败; exit 0; }',
       'echo OK',
     ].join('\n')
@@ -230,8 +267,15 @@ export class RemoteFileSystem {
       '$data = [Convert]::FromBase64String($in.Trim())',
       '$dir = [IO.Path]::GetDirectoryName($P)',
       "if (-not $dir) { $dir = '.' }",
+      "if (-not (Test-Path -LiteralPath $dir)) { Die 'FS_NOT_FOUND' 'directory missing'; exit 0 }",
       '$tmp = Join-Path $dir ([IO.Path]::GetRandomFileName())',
-      '[IO.File]::WriteAllBytes($tmp, $data)',
+      'try {',
+      '  [IO.File]::WriteAllBytes($tmp, $data)',
+      '} catch [System.UnauthorizedAccessException] {',
+      "  Die 'FS_PERMISSION_DENIED' 'permission denied'; exit 0",
+      '} catch {',
+      "  Die 'FS_IO_ERROR' $_.Exception.Message; exit 0",
+      '}',
       "if (-not (Test-Path -LiteralPath $P)) { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue; Die 'FS_NOT_FOUND' 'file missing'; exit 0 }",
       'try { Move-Item -LiteralPath $tmp -Destination $P -Force -ErrorAction Stop } catch { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue; Die \'FS_IO_ERROR\' \'replace failed\'; exit 0 }',
       "'OK'",
@@ -254,6 +298,10 @@ export class RemoteFileSystem {
       // 先读原文，锁内读改写临界区，缺失即 FS_NOT_FOUND
       const readTarget: FsTarget = { targetKey: target.targetKey, displayPath: alias + ':' + rawPath }
       const before = await this.readTextLocked(readTarget)
+      const seen = this.observed.get(target.targetKey)
+      if (seen !== undefined && seen !== this.fingerprint(before)) {
+        throw new FsError('文件在读取后已被修改，请先重新读取再编辑', 'FS_STALE_VERSION')
+      }
       const matches = this.countMatches(before, edit.oldString)
       if (matches === 0) throw new FsError('old_string 未命中任何匹配', 'FS_EDIT_NOT_FOUND')
       if (!edit.replaceAll && matches > 1) {
@@ -263,6 +311,7 @@ export class RemoteFileSystem {
         ? before.split(edit.oldString).join(edit.newString)
         : before.replace(edit.oldString, edit.newString)
       await this.writeReplaced(readTarget, after)
+      this.observed.set(target.targetKey, this.fingerprint(after))
       return { version: FsVersion('e:' + Date.now()), before, after }
     })
   }
