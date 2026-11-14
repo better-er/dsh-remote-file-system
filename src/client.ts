@@ -29,6 +29,7 @@ import {
   classifyFileType,
   languageForPath,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { basenameOf, parseRemoteAddress } from './address.ts'
 
 // 常量
 
@@ -38,56 +39,8 @@ const TYPE_ID = 'dsh-remote-file-system'
 /** tab 类型的判别名。内置已有 guide、text、files、browser、subagentchat。 */
 const KIND = 'remote'
 
-/** 会话文件资源地址前缀，与 util/workspace-path 的语法一致。 */
-const FILE_PREFIX = 'dsh-resource://file/session/'
-
-/** 别名字符集，与 host 端 splitAliasPath 的 ALIAS_RE 一致。 */
-const ALIAS_RE = /^[A-Za-z0-9._-]+$/
-
-/** 单字母别名排除：Windows 盘符 C 与 D 也长这样，本地路径不能被抢。 */
-const SINGLE_LETTER_RE = /^[A-Za-z]$/
-
 /** 正文最多渲染的行数，超出提示，避免超大文件卡住浏览器。 */
 const MAX_RENDER_LINES = 5000
-
-// 地址解析
-
-/** 一个被认领的远程文件地址。 */
-interface RemoteTarget {
-  /** 原始资源地址。 */
-  address: string
-  /** ssh 别名，取自 ~/.ssh/config。 */
-  alias: string
-  /** 远端绝对路径或 ~ 开头路径。 */
-  rawPath: string
-  /** 复原成 host 端认识的形式，即「别名:路径」。 */
-  target: string
-}
-
-/**
- * 从 dsh-resource 文件地址里解析远程目标。
- * 只认 session 作用域，absolute 作用域没有授权会话，也被 host 拒绝。
- * @param address - 资源地址。
- */
-function parseRemoteAddress(address: string): RemoteTarget | null {
-  if (!address.startsWith(FILE_PREFIX)) return null
-  const rest = address.slice(FILE_PREFIX.length)
-  const slash = rest.indexOf('/')
-  if (slash <= 0) return null
-  let path: string
-  try {
-    path = rest.slice(slash + 1).split('/').map(decodeURIComponent).join('/')
-  } catch {
-    return null
-  }
-  const colon = path.indexOf(':')
-  if (colon <= 0) return null
-  const alias = path.slice(0, colon)
-  const rawPath = path.slice(colon + 1)
-  if (!ALIAS_RE.test(alias) || SINGLE_LETTER_RE.test(alias)) return null
-  if (!(rawPath.startsWith('/') || rawPath.startsWith('~/'))) return null
-  return { address, alias, rawPath, target: alias + ':' + rawPath }
-}
 
 // Host 服务面
 
@@ -284,12 +237,6 @@ function codeLanguageOf(path: string): string | null {
   const language = languageForPath(path)
   if (language === undefined || DOCUMENT_LANGUAGES.has(language)) return null
   return language
-}
-
-/** 取路径最后一段，作为 tab 标题，与内置预览器的 basename 一致。 */
-function basenameOf(path: string): string {
-  const name = path.slice(path.lastIndexOf('/') + 1)
-  return name === '' ? path : name
 }
 
 // 正文组件

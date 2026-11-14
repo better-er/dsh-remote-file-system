@@ -42,7 +42,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.systemPrompt.section({
     name: 'tool:read_remote',
     order: ctx.systemPrompt.getSectionOrder('TOOL_READ'),
-    text: 'Use read_remote (not shell commands) to inspect UTF-8 text files on remote hosts over ssh. file_path carries the target as alias:path (e.g. wsl:~/x.md). Results include line numbers; use offset and limit to continue reading large files.',
+    text: 'Use read_remote (not shell commands) to inspect UTF-8 text files on remote hosts over ssh. file_path carries the target as alias:path (e.g. wsl:~/x.md, winbox:D:/work/test.txt); a Windows remote accepts drive-letter paths. Results include line numbers; use offset and limit to continue reading large files.',
   })
   ctx.systemPrompt.section({
     name: 'tool:write_remote',

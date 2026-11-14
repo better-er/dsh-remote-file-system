@@ -43,7 +43,7 @@ export function createReadRemoteTool(fs: RemoteFileSystem): ReturnType<typeof de
     name: 'read_remote',
     description: 'Read a UTF-8 text file on a remote host over ssh and return line-numbered content.',
     parameters: {
-      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md or myserver:/etc/hosts. Alias comes from your ssh config.' },
+      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md, myserver:/etc/hosts or winbox:D:/work/test.txt. Alias comes from your ssh config.' },
       offset: { type: 'number', description: '1-based first line to return. Defaults to 1.' },
       limit: { type: 'number', description: 'Maximum number of lines to return. Defaults to ' + READ_LIMIT + '.' },
     },
