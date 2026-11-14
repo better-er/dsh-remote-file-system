@@ -25,7 +25,7 @@ export function createEditRemoteTool(fs: RemoteFileSystem): ReturnType<typeof de
     name: 'edit_remote',
     description: 'Edit an existing UTF-8 text file on a remote host over ssh by replacing literal text.',
     parameters: {
-      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md or myserver:/etc/hosts.' },
+      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md, myserver:/etc/hosts or winbox:D:/work/test.txt.' },
       old_string: { type: 'string', required: true, description: 'Literal text to replace. Must match exactly.' },
       new_string: { type: 'string', required: true, description: 'Literal replacement text. Use an empty string to delete the match.' },
       replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false; when false, old_string must appear exactly once.' },

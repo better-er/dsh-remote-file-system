@@ -24,7 +24,7 @@ DSH 只有本地文件系统的读写能力，而读写远程文件只能用 Pow
 
 内置查看器只认主机本地文件：点开 `wsl:~/x.md` 时地址是 `dsh-resource://file/session/<id>/wsl:~/x.md`，内置 `text` 类型经 `ctx.fs` 在本地查找而失败。
 
-client 半身注册 `remote` tab 类型，以 extension 优先级认领这类能解析出远程别名的地址，经 Host 自注册的 `/remote-file-system` 通道读取远端文本。外观与内置文档预览一致：38px 路径栏、同一组换行与重新加载图标按钮；代码文件交给共享的 `CodeBlock` 渲染，可切换代码与纯文本，其他文件按源码行渲染。支持 `params.line` 定位与手动刷新。本地文件仍由内置查看器处理。
+client 半身注册 `remote` tab 类型，以 extension 优先级认领这类能解析出远程别名的地址，经 Host 自注册的 `/remote-file-system` 通道读取远端文本。外观与内置文档预览一致：38px 路径栏、同一组换行与重新加载图标按钮；代码文件交给共享的 `CodeBlock` 渲染，可切换代码与纯文本，其他文件按源码行渲染。支持 `params.line` 定位与手动刷新。远端是 Windows 时地址里的盘符路径同样能被认领，tab 标题按正斜杠与反斜杠取最后一段文件名。本地文件仍由内置查看器处理。
 
 `read_remote` 的工具卡按工具名接管，卡内路径是可点击链接，点击即在右侧栏打开对应的 remote tab；点整行可展开结果文本。内置 read 卡只按工具名 `read` 注册，`read_remote` 没有条目而走通用行，也就没有打开文件的入口，故由本插件补上。
 
@@ -89,6 +89,7 @@ pnpm typecheck
 node smoke/verify.mjs     # 手动组装最小 cordis 组合，对 wsl 冒烟三工具
 node smoke/remote-win-smoke.mjs  # 对 Windows 远端的 stat/read/edit/write 冒烟
 node smoke/rpc-smoke.mjs  # 对源码的 RPC 通道做信封级冒烟，不依赖 @deepseek-ai 包
+node smoke/address-smoke.mjs  # 地址解析冒烟，覆盖 POSIX 与 Windows 盘符路径
 ```
 
 ## 依赖与构建注意

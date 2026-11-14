@@ -23,7 +23,7 @@ export function createWriteRemoteTool(fs: RemoteFileSystem): ReturnType<typeof d
     name: 'write_remote',
     description: 'Create a new UTF-8 text file on a remote host over ssh. The target must NOT already exist — write_remote only creates new files, never overwrites.',
     parameters: {
-      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md or myserver:/etc/hosts. Must not already exist.' },
+      file_path: { type: 'string', required: true, description: 'Remote target and path in one: alias:path, e.g. wsl:~/x.md, myserver:/etc/hosts or winbox:D:/work/test.txt. Must not already exist.' },
       content: { type: 'string', required: true, description: 'Full UTF-8 text content to write.' },
     },
     output: {
