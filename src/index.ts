@@ -8,6 +8,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { RemoteFileSystem } from './remote-fs.ts'
+import { DEFAULT_TIMEOUT_MS } from './protocol.ts'
 import { createReadRemoteTool } from './read.ts'
 import { createWriteRemoteTool } from './write.ts'
 import { createEditRemoteTool } from './edit.ts'
@@ -20,10 +21,12 @@ export const name = 'dsh-remote-file-system'
 /** 必需宿主服务：tools 工具注册表与 systemPrompt 引导。 */
 export const inject = ['tools', 'systemPrompt']
 
-/** 插件配置：enabled 总开关。 */
+/** 插件配置：enabled 总开关与 ssh 超时。 */
 export interface Config {
   /** 是否注册远程工具。默认 true。 */
   enabled?: boolean
+  /** 单条 ssh 命令的总超时，毫秒。默认 60000，不小于 1000。 */
+  timeoutMs?: number
 }
 
 /**
@@ -35,8 +38,13 @@ export interface Config {
 export function apply(ctx: Context, config: Config = {}): void {
   if (config.enabled === false) return
 
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1000) {
+    throw new Error('dsh-remote-file-system 的 timeoutMs 须为不小于 1000 的毫秒数，收到：' + String(config.timeoutMs))
+  }
+
   // 构造一次后端实例，三工具共享。普通对象，不注册为 ctx.fs，无副作用。
-  const fs = new RemoteFileSystem()
+  const fs = new RemoteFileSystem({ timeoutMs })
 
   // systemPrompt：为远程工具注册与原生 read、write、edit 等价的使用引导。
   ctx.systemPrompt.section({
