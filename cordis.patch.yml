@@ -5,3 +5,5 @@
       name: 'dsh-remote-file-system'
       config:
         enabled: true
+        # 单条 ssh 命令的总超时，毫秒，默认 60000，下限 1000
+        # timeoutMs: 60000

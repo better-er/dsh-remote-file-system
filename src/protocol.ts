@@ -10,9 +10,29 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { FsError } from '@deepseek-ai/dsh-fs'
 
 const ERR_PREFIX = '__ERR__'
+
+/** 单条远端命令的默认超时。写入路径可由插件配置覆盖。 */
+export const DEFAULT_TIMEOUT_MS = 60_000
+
+/** ssh 连接建立超时，秒。与整条命令的总超时分开，避免长超时把连接等待一起拉长。 */
+const CONNECT_TIMEOUT_SECONDS = 15
+
+/** 超时标记。sshOutcome 把它挂在 FsError.cause 上，上层据此决定是否读回核对。 */
+export class SshTimeoutError extends Error {
+  constructor() {
+    super('远程执行超时')
+    this.name = 'SshTimeoutError'
+  }
+}
+
+/** 判断一个错误是否由远程执行超时引起。 */
+export function isSshTimeout(error: unknown): boolean {
+  return error instanceof Error && error.cause instanceof SshTimeoutError
+}
 
 /** base64 编码。 */
 export function b64(input: string): string { return Buffer.from(input, 'utf8').toString('base64') }
@@ -22,12 +42,37 @@ export function b64d(input: string): string { return Buffer.from(input, 'base64'
 /** 远端平台。POSIX 走 bash -s，Windows 走 powershell -Command -。 */
 export type RemotePlatform = 'posix' | 'windows'
 const PLATFORM_CACHE = new Map<string, RemotePlatform>()
-/** Windows 分支的调用：脚本经 -EncodedCommand 传，数据经 stdin 传。 */
+/** Windows 分支的调用：脚本经 -EncodedCommand 传，数据先落暂存文件再由脚本读取。 */
 export interface WinInvocation { script: string; input?: string }
+
+/**
+ * 脚本里的 stdin 读取占位符。sshOutcome 按远端是否有 pwsh 7 决定替换成哪种读法：
+ * 有 pwsh 就直接读 stdin，没有就走 cmd 的 more 落暂存文件。
+ * Windows PowerShell 5.1 直接读 stdin 不可靠：ReadToEnd 会偶发永久卡死，ReadLine 在约 88KB 处截断，
+ * OpenStandardInput 读大缓冲区同样等不到数据；pwsh 7 与 cmd 的 more 都已实测稳定。
+ */
+export const STDIN_READ_PLACEHOLDER = '__RFS_STDIN_READ__'
 
 /** 把多行 PowerShell 脚本编码成 -EncodedCommand，避免 stdin 被逐行解析拆坏 try 块。 */
 export function windowsCommand(script: string): string {
   return 'powershell -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(script, 'utf16le').toString('base64')
+}
+
+/** 同 windowsCommand，但用 PowerShell 7 的 pwsh。 */
+export function pwshCommand(script: string): string {
+  return 'pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(script, 'utf16le').toString('base64')
+}
+
+const PWSH_CACHE = new Map<string, boolean>()
+
+/** 探测远端是否装了 pwsh 7，结果按别名缓存。 */
+export async function detectPwsh(alias: string): Promise<boolean> {
+  const hit = PWSH_CACHE.get(alias)
+  if (hit !== undefined) return hit
+  const raw = await sshExec(alias, {}, '', { timeoutMs: 15_000 }, 'where pwsh.exe')
+  const found = raw.exitCode === 0 && /pwsh\.exe/i.test(raw.stdout)
+  PWSH_CACHE.set(alias, found)
+  return found
 }
 
 /** 探测远端平台，结果按别名缓存。cmd 能跑通就是 Windows。 */
@@ -72,11 +117,11 @@ export async function sshExec(
   opts: { timeoutMs?: number } = {},
   remoteCommand?: string,
 ): Promise<SshRawResult> {
-  const timeoutMs = opts.timeoutMs ?? 30_000
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   return await new Promise<SshRawResult>((resolve, reject) => {
     const child = spawn('ssh', [
       '-o', 'BatchMode=yes',
-      '-o', 'ConnectTimeout=' + Math.max(1, Math.floor(timeoutMs / 1000)),
+      '-o', 'ConnectTimeout=' + CONNECT_TIMEOUT_SECONDS,
       alias,
       remoteCommand ?? envPrefix(env),
     ], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -120,11 +165,35 @@ export async function sshOutcome(
     if (!win) throw new FsError('该操作缺少 Windows 版本的远端脚本', 'FS_IO_ERROR')
     body = win.input ?? ''
     remoteCommand = windowsCommand(win.script)
+    if (body === '') {
+      if (win.script.includes(STDIN_READ_PLACEHOLDER)) {
+        throw new FsError('远端脚本需要 stdin 数据，但调用方没有提供', 'FS_IO_ERROR')
+      }
+    } else {
+      const inputLength = body.length
+      if (await detectPwsh(alias)) {
+        // pwsh 7 读 stdin 稳定，一条命令把 base64 直接交给脚本。
+        remoteCommand = pwshCommand(win.script.replace(STDIN_READ_PLACEHOLDER, winReadConsole(inputLength)))
+      } else {
+        // Windows PowerShell 5.1 读 stdin 会卡死或截断，先经 cmd 的 more 落到暂存文件再让脚本读。
+        const name = 'rfs-' + randomBytes(8).toString('hex') + '.b64'
+        const staged = await sshExec(alias, {}, body, opts, 'more > "%TEMP%\\' + name + '"')
+        if (staged.exitCode === -1) throw new FsError('远程执行超时', 'FS_IO_ERROR', { cause: new SshTimeoutError() })
+        if (staged.exitCode !== 0) {
+          const detail = staged.stderr.trim() || '暂存远端 stdin 数据失败'
+          throw new FsError(detail, 'FS_IO_ERROR')
+        }
+        body = ''
+        remoteCommand = windowsCommand(win.script.replace(STDIN_READ_PLACEHOLDER, winReadStaged(name, inputLength)))
+      }
+    }
   }
   const raw = await sshExec(alias, env, body, opts, remoteCommand).catch((e: Error) => {
     throw new FsError(e.message, 'FS_IO_ERROR')
   })
-  if (raw.exitCode === -1) throw new FsError('远程执行超时', 'FS_IO_ERROR')
+  if (raw.exitCode === -1) {
+    throw new FsError('远程执行超时', 'FS_IO_ERROR', { cause: new SshTimeoutError() })
+  }
   if (raw.exitCode === 0) return { code: 'OK', stdout: raw.stdout }
   // 解析 stderr 的 __ERR__ 行
   const line = raw.stderr.split('\n').find((l: string) => l.startsWith(ERR_PREFIX))
@@ -137,6 +206,30 @@ export async function sshOutcome(
   }
   const detail = raw.stderr.trim() || '远程执行失败且无输出'
   throw new FsError(detail, 'FS_IO_ERROR')
+}
+
+/** 去掉 stdin 或 more 带进来的空白，再按预期 base64 长度校验，长度不符立刻报错。 */
+function winStdinTail(bytes: number): string[] {
+  return [
+    "$in = $raw -replace '\\s', ''",
+    "if ($in.Length -ne " + bytes + ") { Die 'FS_IO_ERROR' ('stdin 数据长度不符，期望 ' + " + bytes + " + '，实际 ' + $in.Length); exit 0 }",
+  ]
+}
+
+/** pwsh 7 直接读 stdin 的片段。 */
+function winReadConsole(bytes: number): string {
+  return ['$raw = [Console]::In.ReadToEnd()', ...winStdinTail(bytes)].join('\n')
+}
+
+/** Windows PowerShell 5.1 从 more 暂存文件读取的片段。 */
+function winReadStaged(name: string, bytes: number): string {
+  return [
+    "$tmp = Join-Path $env:TEMP '" + name + "'",
+    "if (-not (Test-Path -LiteralPath $tmp)) { Die 'FS_IO_ERROR' '暂存数据不存在'; exit 0 }",
+    "try { $raw = [IO.File]::ReadAllText($tmp) } catch { Die 'FS_IO_ERROR' '读取暂存数据失败'; exit 0 }",
+    'Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue',
+    ...winStdinTail(bytes),
+  ].join('\n')
 }
 
 /** 远端 bash 失败打一行 __ERR__ 并退出的辅助片段，拼进脚本。 */

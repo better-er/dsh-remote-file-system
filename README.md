@@ -20,6 +20,8 @@ DSH 只有本地文件系统的读写能力，而读写远程文件只能用 Pow
 
 `read_remote` 只接受有效 UTF-8，读到非文本报 `FS_NOT_TEXT`。`edit_remote` 会核对上一次读取的内容指纹，读完之后文件被外部改过时报 `FS_STALE_VERSION`，需要重新读取再编辑。
 
+单条 ssh 命令的总超时默认 60 秒，可用插件配置 `timeoutMs` 调整。写入超时后先核对远端内容的 sha256，等于本次写入文本就按成功返回，避免「实际写进去了却报超时」；核对不一致才报错。
+
 ### 右侧栏预览
 
 内置查看器只认主机本地文件：点开 `wsl:~/x.md` 时地址是 `dsh-resource://file/session/<id>/wsl:~/x.md`，内置 `text` 类型经 `ctx.fs` 在本地查找而失败。
@@ -76,7 +78,7 @@ dsh plugin --profile web remove dsh-remote-file-system
 
 文件后端 `RemoteFileSystem` 刻意不继承 `@deepseek-ai/dsh-fs` 的 `FileSystem` 与 cordis `Service`，避免「继承即注册」污染会话 `ctx.fs`；只借用 `dsh-fs` 类型词表与 `FsError`。字节经 base64 再经 ssh 传输。
 
-远端平台按别名探测一次并缓存：能跑通 `cmd /c echo Windows_NT` 判为 Windows，否则按 POSIX。POSIX 走 `bash -s`，Windows 走 `powershell -EncodedCommand`，脚本不进命令行以免被 32k 上限卡住，写入的数据经 stdin 传。
+远端平台按别名探测一次并缓存：能跑通 `cmd /c echo Windows_NT` 判为 Windows，否则按 POSIX。POSIX 走 `bash -s`。Windows 写入优先用 pwsh 7 的 `-EncodedCommand` 直接读 stdin；远端没有 pwsh 才回退到 Windows PowerShell 5.1，并先用 cmd 的 `more` 把数据落到 `%TEMP%` 的随机暂存文件再由脚本读取，因为 5.1 的 `ReadToEnd` 会偶发永久卡死、`ReadLine` 在约 88KB 处截断。
 
 浏览器半身经 Host 自注册的 `/remote-file-system` 通道读取远端文本，复用 `connection.requestRejection` 做 Host 校验与浏览器鉴权，与 dsh-classic-coding 的 `src/rpc-channel.ts` 同源。
 

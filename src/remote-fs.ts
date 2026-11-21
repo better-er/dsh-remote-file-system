@@ -24,7 +24,7 @@ import type {
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { createHash } from 'node:crypto'
-import { b64, PATH_PROLOGUE, DIE_HELPER, B64_HELPER, sshOutcome } from './protocol.ts'
+import { b64, DEFAULT_TIMEOUT_MS, isSshTimeout, PATH_PROLOGUE, DIE_HELPER, B64_HELPER, STDIN_READ_PLACEHOLDER, sshOutcome } from './protocol.ts'
 
 /** 每 targetKey 串行队列，维护每个 key 的尾 Promise。 */
 const TAILS = new Map<string, Promise<unknown>>()
@@ -69,11 +69,47 @@ export class RemoteFileSystem {
   /** 单次读取字节上限，超限拒绝且不做流式，见 DESIGN §7 资源上限。 */
   readonly readMaxBytes = 50 * 1024 * 1024
 
+  /** 单条 ssh 命令的总超时，所有读写共用。 */
+  private readonly timeoutMs: number
+
+  /** 超时后内容核对的超时。核对是判定成败的最后一步，不跟随调小的总超时。 */
+  private readonly verifyTimeoutMs: number
+
   /** 读过的内容指纹，供 editText 判断「读到之后又被改过」。只在 host 进程内有效。 */
   private readonly observed = new Map<string, string>()
 
+  constructor(options: { timeoutMs?: number } = {}) {
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.verifyTimeoutMs = Math.max(this.timeoutMs, 30_000)
+  }
+
   private fingerprint(text: string): string {
     return createHash('sha256').update(text, 'utf8').digest('hex')
+  }
+
+  /**
+   * 超时后核对远端内容是否已经等于本次写入的文本。
+   * 用远端 sha256 而非拉回全文，避免为大文件再付一次传输代价。
+   * @param target - 目标文件。
+   * @param content - 本次应当写入的文本。
+   * @returns 远端当前内容的 sha256 是否与 content 一致。
+   */
+  private async remoteContentEquals(target: FsTarget, content: string): Promise<boolean> {
+    const { alias, rawPath } = splitAliasPath(target.displayPath)
+    const env = { RM_PATH: b64(rawPath) }
+    const action = [
+      PATH_PROLOGUE,
+      DIE_HELPER,
+      'if [ ! -f "$P" ]; then die FS_NOT_FOUND 文件不存在; exit 0; fi',
+      'if command -v sha256sum >/dev/null 2>&1; then sha256sum "$P" | cut -d" " -f1; else openssl dgst -sha256 -r "$P" | cut -d" " -f1; fi',
+    ].join('\n')
+    const winScript = [
+      winPrologue(rawPath),
+      "if (-not (Test-Path -LiteralPath $P)) { Die 'FS_NOT_FOUND' '文件不存在'; exit 0 }",
+      '(Get-FileHash -LiteralPath $P -Algorithm SHA256).Hash.ToLower()',
+    ].join('\n')
+    const out = await sshOutcome(alias, env, action, { timeoutMs: this.verifyTimeoutMs }, { script: winScript })
+    return out.stdout.trim().toLowerCase() === this.fingerprint(content)
   }
 
   /** 解析「别名:路径」为稳定 FsTarget。targetKey 含 alias 与 rawPath，displayPath 即原名。 */
@@ -116,7 +152,7 @@ export class RemoteFileSystem {
       "  else { 'OTHER' }",
       "} catch { 'ABSENT' }",
     ].join('\n')
-    const out = await sshOutcome(alias, env, action, {}, { script: winScript })
+    const out = await sshOutcome(alias, env, action, { timeoutMs: this.timeoutMs }, { script: winScript })
     const s = out.stdout.trim()
     if (s === 'ABSENT') return undefined
     if (s === 'DIR') return { version: FsVersion('dir:' + Date.now()), type: 'directory' }
@@ -168,7 +204,7 @@ export class RemoteFileSystem {
       'if ($b.Length -gt ' + this.readMaxBytes + ") { Die 'FS_TOO_LARGE' '文件超过单次读取上限'; exit 0 }",
       '[Convert]::ToBase64String($b)',
     ].join('\n')
-    const out = await sshOutcome(alias, env, action, {}, { script: winScript })
+    const out = await sshOutcome(alias, env, action, { timeoutMs: this.timeoutMs }, { script: winScript })
     const raw = Buffer.from(out.stdout.replace(/\s+$/u, ''), 'base64')
     try {
       return new TextDecoder('utf-8', { fatal: true }).decode(raw)
@@ -215,7 +251,7 @@ export class RemoteFileSystem {
     ].join('\n')
     const winScript = [
       winPrologue(rawPath),
-      '$in = [Console]::In.ReadToEnd()',
+      STDIN_READ_PLACEHOLDER,
       '$data = [Convert]::FromBase64String($in.Trim())',
       "if (Test-Path -LiteralPath $P) { Die 'FS_NOT_OBSERVED' '文件已存在，write_remote 只允许新建'; exit 0 }",
       '$dir = [IO.Path]::GetDirectoryName($P)',
@@ -238,7 +274,13 @@ export class RemoteFileSystem {
       '}',
       "'OK'",
     ].join('\n')
-    await sshOutcome(alias, env, action, {}, { script: winScript, input: data })
+    try {
+      await sshOutcome(alias, env, action, { timeoutMs: this.timeoutMs }, { script: winScript, input: data })
+    } catch (error) {
+      // 超时不等于失败：远端可能已经 mv 完成，只是回执没回来。核对内容后按成功返回，不符再抛原超时。
+      if (!isSshTimeout(error)) throw error
+      if (!(await this.confirmAfterTimeout(target, content, error))) throw error
+    }
     this.observed.set(target.targetKey, this.fingerprint(content))
     return { operation: 'create', version: FsVersion('w:' + Date.now()), before: null, after: content }
   }
@@ -263,7 +305,7 @@ export class RemoteFileSystem {
     ].join('\n')
     const winScript = [
       winPrologue(rawPath),
-      '$in = [Console]::In.ReadToEnd()',
+      STDIN_READ_PLACEHOLDER,
       '$data = [Convert]::FromBase64String($in.Trim())',
       '$dir = [IO.Path]::GetDirectoryName($P)',
       "if (-not $dir) { $dir = '.' }",
@@ -280,8 +322,30 @@ export class RemoteFileSystem {
       'try { Move-Item -LiteralPath $tmp -Destination $P -Force -ErrorAction Stop } catch { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue; Die \'FS_IO_ERROR\' \'替换失败\'; exit 0 }',
       "'OK'",
     ].join('\n')
-    await sshOutcome(alias, env, action, {}, { script: winScript, input: data })
+    try {
+      await sshOutcome(alias, env, action, { timeoutMs: this.timeoutMs }, { script: winScript, input: data })
+    } catch (error) {
+      // 同 writeTextLocked：超时后远端可能已替换完成，按内容核对决定成败。
+      if (!isSshTimeout(error)) throw error
+      if (!(await this.confirmAfterTimeout(target, content, error))) throw error
+    }
     return content
+  }
+
+  /**
+   * 超时后的内容核对。核对本身失败时抛出带两条原因的 FsError，不静默降级。
+   * @param target - 目标文件。
+   * @param content - 应当写入的文本。
+   * @param timeout - 原始超时错误，作为 cause 保留。
+   * @returns 远端内容是否已等于 content。
+   */
+  private async confirmAfterTimeout(target: FsTarget, content: string, timeout: unknown): Promise<boolean> {
+    try {
+      return await this.remoteContentEquals(target, content)
+    } catch (verifyError) {
+      const detail = verifyError instanceof Error ? verifyError.message : String(verifyError)
+      throw new FsError('远程执行超时，且无法核对远端内容：' + detail, 'FS_IO_ERROR', { cause: timeout })
+    }
   }
 
   /**
